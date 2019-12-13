@@ -1,20 +1,45 @@
 ﻿using UnityEngine;
+using System.Collections.Generic;
 
 public class RayTracingMaster : MonoBehaviour
 {
-    public ComputeShader RayTracingShader;
+    
+    //skybox globals
     public Texture SkyboxTexture;
     public float SkyboxIntensity;
 
+    //skybox locals
     public Light DirectionalLight;
 
-    private RenderTexture _target;
-    private Camera _camera;
+    //sphere globals
+    public Vector2 SphereRadius = new Vector2(3.0f, 8.0f);
+    public uint SpheresMax = 100;
+    public float SpherePlacementRadius = 100.0f;
+    public int SphereSeed;
 
-    private uint _currentSample = 0;
+    //sphere locals
+    private ComputeBuffer _sphereBuffer;
+
+    //anti-aliasing locals
+    private uint _currentSample = 0; 
     private Material _addMaterial;
 
+    //core globals
+    public ComputeShader RayTracingShader;
 
+    //core locals
+    private Camera _camera;
+    private RenderTexture _converged;
+    private RenderTexture _target;
+
+
+    struct Sphere
+    {
+        public Vector3 position;
+        public float radius;
+        public Vector3 albedo;
+        public Vector3 specular;
+    };
 
 
     private void Awake()
@@ -38,6 +63,17 @@ public class RayTracingMaster : MonoBehaviour
         }
     }
 
+    private void OnEnable()
+    {
+        _currentSample = 0;
+        SetUpScene();
+    }
+
+    private void OnDisable()
+    {
+        if (_sphereBuffer != null)
+            _sphereBuffer.Release();
+    }
 
     private void OnRenderImage(RenderTexture source, RenderTexture destination)
     {
@@ -60,8 +96,44 @@ public class RayTracingMaster : MonoBehaviour
         if (_addMaterial == null)
             _addMaterial = new Material(Shader.Find("Hidden/AddShader"));
         _addMaterial.SetFloat("_Sample", _currentSample);
-        Graphics.Blit(_target, destination, _addMaterial);
+        Graphics.Blit(_target, _converged, _addMaterial);
+        Graphics.Blit(_converged, destination);
         _currentSample++;
+    }
+
+
+    private void SetUpScene()
+    {
+        Random.InitState(SphereSeed);
+        List<Sphere> spheres = new List<Sphere>();
+        // Add a number of random spheres
+        for (int i = 0; i < SpheresMax; i++)
+        {
+            Sphere sphere = new Sphere();
+            // Radius and radius
+            sphere.radius = SphereRadius.x + Random.value * (SphereRadius.y - SphereRadius.x);
+            Vector2 randomPos = Random.insideUnitCircle * SpherePlacementRadius;
+            sphere.position = new Vector3(randomPos.x, sphere.radius, randomPos.y);
+            // Reject spheres that are intersecting others
+            foreach (Sphere other in spheres)
+            {
+                float minDist = sphere.radius + other.radius;
+                if (Vector3.SqrMagnitude(sphere.position - other.position) < minDist * minDist)
+                    goto SkipSphere;
+            }
+            // Albedo and specular color
+            Color color = Random.ColorHSV();
+            bool metal = Random.value < 0.5f;
+            sphere.albedo = new Vector3(0.2f, 0.2f, 0.2f);
+            sphere.specular = new Vector3(1.0f, 0.78f, 0.34f);
+            // Add the sphere to the list
+            spheres.Add(sphere);
+        SkipSphere:
+            continue;
+        }
+        // Assign to compute buffer
+        _sphereBuffer = new ComputeBuffer(spheres.Count, 40);
+        _sphereBuffer.SetData(spheres);
     }
 
     private void InitRenderTexture()
@@ -70,25 +142,42 @@ public class RayTracingMaster : MonoBehaviour
         {
             // Release render texture if we already have one
             if (_target != null)
+            {
                 _target.Release();
+                _converged.Release();
+            }
 
             // Get a render target for Ray Tracing
             _target = new RenderTexture(Screen.width, Screen.height, 0,
                 RenderTextureFormat.ARGBFloat, RenderTextureReadWrite.Linear);
             _target.enableRandomWrite = true;
             _target.Create();
+            _converged = new RenderTexture(Screen.width, Screen.height, 0,
+            RenderTextureFormat.ARGBFloat, RenderTextureReadWrite.Linear);
+            _converged.enableRandomWrite = true;
+            _converged.Create();
+
+            // Reset sampling
+            _currentSample = 0;
         }
+
+
+        
     }
 
     private void SetShaderParameters()
     {
         RayTracingShader.SetMatrix("_CameraToWorld", _camera.cameraToWorldMatrix);
         RayTracingShader.SetMatrix("_CameraInverseProjection", _camera.projectionMatrix.inverse);
-        RayTracingShader.SetTexture(0, "_SkyboxTexture", SkyboxTexture);
         RayTracingShader.SetVector("_PixelOffset", new Vector2(Random.value, Random.value));
         RayTracingShader.SetFloat("_SkyboxIntensity", SkyboxIntensity);
+        RayTracingShader.SetTexture(0, "_SkyboxTexture", SkyboxTexture);
+
         Vector3 l = DirectionalLight.transform.forward;
         RayTracingShader.SetVector("_DirectionalLight", new Vector4(l.x, l.y, l.z, DirectionalLight.intensity));
+
+        RayTracingShader.SetBuffer(0, "_Spheres", _sphereBuffer);
+        RayTracingShader.SetFloat("_Seed", Random.value);
     }
 
 } //class

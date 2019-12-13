@@ -16,6 +16,7 @@ float2 _PixelOffset;
 
 float4 _DirectionalLight;
 
+
 static const float PI = 3.14159265f;
 
 RWTexture2D<float4> Result;
@@ -35,11 +36,37 @@ struct RayHit
 	float3 position;
 	float distance;
 	float3 normal;
+	float3 albedo;
+	float3 specular;
 };
+
+struct Sphere
+{
+	float3 position;
+	float radius;
+	float3 albedo;
+	float3 specular;
+};
+
+StructuredBuffer<Sphere> _Spheres;
+
+//--------------------------------------------------------------------------------------
+// Random!
+//--------------------------------------------------------------------------------------
+
+float2 _Pixel;
+float _Seed;
+float rand()
+{
+	float result = frac(sin(_Seed / 100.0f * dot(_Pixel, float2(12.9898f, 78.233f))) * 43758.5453f);
+	_Seed += 1.0f;
+	return result;
+}
 
 //--------------------------------------------------------------------------------------
 // Creating Rays
 //--------------------------------------------------------------------------------------
+
 Ray CreateRay(float3 origin, float3 direction)
 {
 	Ray ray;
@@ -71,9 +98,10 @@ RayHit CreateRayHit()
 	hit.position = float3(0.0f, 0.0f, 0.0f);
 	hit.distance = 1.#INF;
 	hit.normal = float3(0.0f, 0.0f, 0.0f);
+	hit.albedo = float3(0.0f, 0.0f, 0.0f);
+	hit.specular = float3(0.0f, 0.0f, 0.0f);
 	return hit;
 }
-
 
 
 //Intersecting a line with an infinite plane at y = 0
@@ -86,15 +114,17 @@ void IntersectGroundPlane(Ray ray, inout RayHit bestHit)
 		bestHit.distance = t;
 		bestHit.position = ray.origin + t * ray.direction;
 		bestHit.normal = float3(0.0f, 1.0f, 0.0f);
+		bestHit.albedo = float3(0.1f, 0.1f, 0.1f);
+		bestHit.specular = float3(0.2f, 0.2f, 0.2f);
 	}
 }
 
-void IntersectSphere(Ray ray, inout RayHit bestHit, float4 sphere)
+void IntersectSphere(Ray ray, inout RayHit bestHit, Sphere sphere)
 {
 	// Calculate distance along the ray where the sphere is intersected
-	float3 d = ray.origin - sphere.xyz;
+	float3 d = ray.origin - sphere.position;
 	float p1 = -dot(ray.direction, d);
-	float p2sqr = p1 * p1 - dot(d, d) + sphere.w * sphere.w;
+	float p2sqr = p1 * p1 - dot(d, d) + sphere.radius * sphere.radius;
 	if (p2sqr < 0)
 		return;
 	float p2 = sqrt(p2sqr);
@@ -103,17 +133,24 @@ void IntersectSphere(Ray ray, inout RayHit bestHit, float4 sphere)
 	{
 		bestHit.distance = t;
 		bestHit.position = ray.origin + t * ray.direction;
-		bestHit.normal = normalize(bestHit.position - sphere.xyz);
+		bestHit.normal = normalize(bestHit.position - sphere.position);
+		bestHit.albedo = sphere.albedo;
+		bestHit.specular = sphere.specular;
 	}
 }
 
 RayHit Trace(Ray ray)
 {
 	RayHit bestHit = CreateRayHit();
+	
 	IntersectGroundPlane(ray, bestHit);
-	for (int i = 0; i < 20; i++) 
-		for (int j = 0; j < 20; j++)
-			IntersectSphere(ray, bestHit, float4((1.0f + i) * 5.0f, 1.5f, (1.0f + j) * 5.0f, 1.5f)); //sphere dimensions
+
+	// Trace spheres
+	uint numSpheres, stride;
+	_Spheres.GetDimensions(numSpheres, stride);
+	for (uint i = 0; i < numSpheres; i++)
+		IntersectSphere(ray, bestHit, _Spheres[i]);
+
 	return bestHit;
 }
 
@@ -121,12 +158,10 @@ float3 Shade(inout Ray ray, RayHit hit)
 {
     if (hit.distance < 1.#INF)
     {
-        float3 specular = float3(0.04f, 0.04f, 0.04f); //specular color
-		float3 albedo = float3(0.8f, 0.8f, 0.8f); //albedo color
         // Reflect the ray and multiply energy with specular reflection
         ray.origin = hit.position + hit.normal * 0.001f;
         ray.direction = reflect(ray.direction, hit.normal);
-        ray.energy *= specular;
+        ray.energy *= hit.specular;
 
 		// Shadow test ray
 		bool shadow = false;
@@ -138,7 +173,7 @@ float3 Shade(inout Ray ray, RayHit hit)
 		}
 
 		// Return a diffuse-shaded color
-		return saturate(dot(hit.normal, _DirectionalLight.xyz) * -1) * _DirectionalLight.w * albedo;
+		return saturate(dot(hit.normal, _DirectionalLight.xyz) * -1) * _DirectionalLight.w * hit.albedo;
     }
     else
     {
@@ -152,11 +187,13 @@ float3 Shade(inout Ray ray, RayHit hit)
 }
 
 //--------------------------------------------------------------------------------------
-// CSMain
+// Kernel
 //--------------------------------------------------------------------------------------
 [numthreads(8, 8, 1)]
 void CSMain(uint3 id : SV_DispatchThreadID)
 {
+	_Pixel = id.xy
+
 	// Get the dimensions of the RenderTexture
 	uint width, height;
 	Result.GetDimensions(width, height);
