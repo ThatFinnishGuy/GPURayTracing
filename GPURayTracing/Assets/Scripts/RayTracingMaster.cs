@@ -1,6 +1,8 @@
 ﻿using UnityEngine;
 using System.Collections.Generic;
 
+/* GPU Ray Tracing implementation as seen in http://blog.three-eyed-games.com/2018/05/03/gpu-ray-tracing-in-unity-part-1/ */
+
 public class RayTracingMaster : MonoBehaviour
 {
     
@@ -123,9 +125,9 @@ public class RayTracingMaster : MonoBehaviour
             }
             // Albedo and specular color
             Color color = Random.ColorHSV();
-            bool metal = Random.value < 0.5f;
-            sphere.albedo = new Vector3(0.2f, 0.2f, 0.2f);
-            sphere.specular = new Vector3(1.0f, 0.78f, 0.34f);
+            bool metal = Random.value < 1.0f;
+            sphere.albedo = metal ? Vector4.zero : new Vector4(color.r, color.g, color.b);
+            sphere.specular = metal ? new Vector4(color.r, color.g, color.b) : new Vector4(0.04f, 0.04f, 0.04f);
             // Add the sphere to the list
             spheres.Add(sphere);
         SkipSphere:
